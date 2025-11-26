@@ -6,20 +6,34 @@ from .normalization import normalize_list
 from .ml_model import symptom_model
 from .red_flags import evaluate_red_flags
 
+# -----------------------------------------------------
+#  FASTAPI APP
+# -----------------------------------------------------
 app = FastAPI(
     title="Symptom Checker API",
     description="Basic demo API with simple ML model. Not for medical use.",
     version="0.2.0"
 )
 
+# -----------------------------------------------------
+#  CORS CONFIG (VERCEL + LOCALHOST)
+# -----------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:4200", "*"],
+    allow_origins=[
+        "http://localhost:4200",
+        "https://fe-ai.vercel.app",
+        "https://fe-ai.vercel.app/home",
+        "*"  # optional, you can remove if you want strict security
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# -----------------------------------------------------
+#  CONSTANTS
+# -----------------------------------------------------
 CONDITION_SEVERITY = {
     "flu": "medium",
     "meningitis": "high",
@@ -36,6 +50,9 @@ DEFAULT_ADVICE = {
     "high": "Seek urgent medical attention immediately."
 }
 
+# -----------------------------------------------------
+#  LOAD ML MODEL
+# -----------------------------------------------------
 @app.on_event("startup")
 def load_model():
     try:
@@ -45,16 +62,26 @@ def load_model():
     except Exception as exc:
         raise RuntimeError("Unable to load model artifacts.") from exc
 
-# Optional helper for GET in browser
+# -----------------------------------------------------
+#  OPTIONAL GET /analyze FOR TESTING
+# -----------------------------------------------------
 @app.get("/analyze")
 def analyze_usage():
     return {
         "message": "Use POST /analyze with JSON body.",
-        "example": { "symptoms": ["fever", "cough"], "age": 18, "gender": "male" }
+        "example": {
+            "symptoms": ["fever", "cough"],
+            "age": 18,
+            "gender": "male"
+        }
     }
 
+# -----------------------------------------------------
+#  MAIN ENDPOINT — POST /analyze
+# -----------------------------------------------------
 @app.post("/analyze", response_model=AnalyzeResponse)
 def analyze(req: AnalyzeRequest):
+
     if not req.symptoms:
         raise HTTPException(status_code=400, detail="At least one symptom is required.")
 
@@ -73,18 +100,22 @@ def analyze(req: AnalyzeRequest):
     probabilities = {c: float(p) for c, p in predictions} or None
 
     severity_rank = {"low": 0, "medium": 1, "high": 2}
+
     computed_severity = "low"
     for cond in insights:
         sev = CONDITION_SEVERITY.get(cond)
         if sev and severity_rank[sev] > severity_rank[computed_severity]:
             computed_severity = sev
+
     if red_flag_severity and severity_rank[red_flag_severity] > severity_rank[computed_severity]:
         computed_severity = red_flag_severity
 
     advice = DEFAULT_ADVICE[computed_severity]
 
+    # Accuracy level
     top_condition = insights[0] if insights else None
-    top_probability = probabilities[top_condition] if top_condition and probabilities else 0.0
+    top_probability = probabilities.get(top_condition, 0.0) if probabilities else 0.0
+
     if top_probability >= 0.5:
         accuracy_level = "High"
     elif top_probability >= 0.2:
@@ -95,8 +126,8 @@ def analyze(req: AnalyzeRequest):
     condition_details = treatment = None
     if top_condition:
         info = symptom_model.get_condition_info(top_condition)
-        condition_details = info.get("details") or None
-        treatment = info.get("treatment") or None
+        condition_details = info.get("details")
+        treatment = info.get("treatment")
 
     return AnalyzeResponse(
         severity=computed_severity,
@@ -110,18 +141,23 @@ def analyze(req: AnalyzeRequest):
         accuracyLevel=accuracy_level,
     )
 
+# -----------------------------------------------------
+#  HEALTH CHECK
+# -----------------------------------------------------
 @app.get("/health")
 def health():
     return {"status": "ok", "model_loaded": symptom_model.loaded}
 
+# -----------------------------------------------------
+#  VERSION
+# -----------------------------------------------------
 @app.get("/version")
 def version():
     return {"app": "Symptom Checker API", "version": "0.2.0"}
 
+# -----------------------------------------------------
+#  ROOT
+# -----------------------------------------------------
 @app.get("/")
 def root():
     return {"message": "Symptom Checker API running. Not for diagnostic use."}
-
-@app.get("/")
-def root():
-    return {"ok": True}
